@@ -50,9 +50,3 @@ The main blocker is still SPI communication with the IT8951 on the EE03 board. T
 - multiple VCOM write variants
 
 Even with those probes, the tested board still reports zeroed device info and does not refresh the panel.
-
-## Notes
-
-- `secrets.yaml` is intentionally gitignored and should not be committed.
-- `build_log.txt`, `.esphome/`, and workspace files are also ignored for a cleaner upload.
-- The larger `xiao_test.yaml` expects extra assets if you want to use the full designer layout.
