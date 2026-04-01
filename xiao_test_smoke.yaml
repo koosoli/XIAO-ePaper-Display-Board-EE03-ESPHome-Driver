@@ -1,0 +1,44 @@
+esphome:
+  name: xiao-epaper-smoke
+  friendly_name: xiao-epaper-smoke
+  on_boot:
+    priority: -10
+    then:
+      - delay: 8s
+      - component.update: epaper_display
+
+esp32:
+  board: seeed_xiao_esp32s3
+  framework:
+    type: arduino
+
+psram:
+  mode: octal
+
+logger:
+  level: DEBUG
+
+external_components:
+  - source:
+      type: local
+      path: .
+    components: [it8951]
+
+display:
+  - platform: it8951
+    id: epaper_display
+    vcom: 1400
+    update_interval: never
+    lambda: |-
+      const auto COLOR_WHITE = Color(0, 0, 0);
+      const auto COLOR_BLACK = Color(255, 255, 255);
+
+      it.fill(COLOR_WHITE);
+      it.rectangle(20, 20, 1832, 1364, COLOR_BLACK);
+      it.filled_rectangle(80, 80, 240, 240, COLOR_BLACK);
+      it.filled_rectangle(400, 80, 240, 240, COLOR_WHITE);
+      it.rectangle(400, 80, 240, 240, COLOR_BLACK);
+      it.line(80, 400, 1790, 1320, COLOR_BLACK);
+      it.line(1790, 400, 80, 1320, COLOR_BLACK);
+      it.circle(936, 702, 180, COLOR_BLACK);
+      it.filled_circle(936, 702, 60, COLOR_BLACK);
