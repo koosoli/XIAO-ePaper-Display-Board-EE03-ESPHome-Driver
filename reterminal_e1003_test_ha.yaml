@@ -1,16 +1,19 @@
-# Home Assistant / ESPHome-ready first test for the reTerminal E1003 + IT8951.
-# Put the `it8951_reterminal_e1003` folder next to this YAML in your ESPHome
-# config directory. This file is safe to publish. Create a local
-# `secrets.yaml` from `secrets.example.yaml` before compiling.
+# Home Assistant / ESPHome-ready reTerminal E1003 + IT8951 config.
+# This file is safe to publish. Put `it8951_reterminal_e1003/` next to it and
+# create a local `secrets.yaml` from `secrets.example.yaml`.
+#
+# Important hardware note:
+# GPIO21 is used by the E1003 display path as ITE_ENABLE, so the old generic
+# reTerminal "battery enable" output is intentionally not declared here.
 
 esphome:
   name: reterminal-e1003-epaper
   friendly_name: reterminal-e1003-epaper
   on_boot:
-    priority: -10
+    priority: 300
     then:
-      - delay: 8s
-      - component.update: epaper_display
+      - delay: 2s
+      - script.execute: manage_run_and_sleep
 
 esp32:
   board: seeed_xiao_esp32s3
@@ -46,6 +49,107 @@ external_components:
       path: .
     components: [it8951_reterminal_e1003]
 
+globals:
+  - id: display_page
+    type: int
+    restore_value: true
+    initial_value: '0'
+  - id: page_refresh_default_s
+    type: int
+    restore_value: true
+    initial_value: '600'
+  - id: page_refresh_current_s
+    type: int
+    restore_value: false
+    initial_value: '60'
+  - id: initial_sensor_sync_pending
+    type: bool
+    restore_value: false
+    initial_value: 'true'
+
+http_request:
+  verify_ssl: false
+  timeout: 20s
+
+i2c:
+  - sda: GPIO19
+    scl: GPIO20
+    scan: true
+    id: bus_a
+
+output:
+  - platform: ledc
+    pin: GPIO45
+    id: buzzer_output
+
+rtttl:
+  id: reterminal_buzzer
+  output: buzzer_output
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+sensor:
+  - platform: adc
+    pin: GPIO1
+    name: "Battery Voltage"
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    id: battery_voltage
+    update_interval: 60s
+    attenuation: 12db
+    filters:
+      - multiply: 2
+
+  - platform: sht4x
+    i2c_id: bus_a
+    id: sht4x_sensor
+    temperature:
+      name: "Temperature"
+      id: sht4x_temperature
+    humidity:
+      name: "Humidity"
+      id: sht4x_humidity
+    address: 0x44
+    update_interval: 60s
+
+  - platform: template
+    name: "Battery Level"
+    id: battery_level
+    unit_of_measurement: "%"
+    icon: "mdi:battery"
+    device_class: battery
+    state_class: measurement
+    lambda: |-
+      if (id(battery_voltage).state > 4.15) return 100;
+      if (id(battery_voltage).state < 3.27) return 0;
+      return (id(battery_voltage).state - 3.27) / (4.15 - 3.27) * 100.0;
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO3
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Refresh Button"
+    id: button_refresh
+    on_press:
+      then:
+        - component.update: epaper_display
+
+  - platform: gpio
+    pin:
+      number: GPIO5
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Home Button"
+    id: button_home
+    on_press:
+      then:
+        - script.execute: manage_run_and_sleep
+
 button:
   - platform: template
     name: "Refresh Display"
@@ -53,31 +157,189 @@ button:
       then:
         - component.update: epaper_display
 
+  - platform: template
+    name: "Play Beep Short"
+    icon: "mdi:bell-ring"
+    on_press:
+      - rtttl.play: "beep:d=32,o=5,b=200:16e6"
+
+  - platform: template
+    name: "Play Beep OK"
+    icon: "mdi:check-circle-outline"
+    on_press:
+      - rtttl.play: "ok:d=16,o=5,b=200:e6"
+
+  - platform: template
+    name: "Play Beep Error"
+    icon: "mdi:alert-circle-outline"
+    on_press:
+      - rtttl.play: "error:d=16,o=5,b=200:c6"
+
+  - platform: template
+    name: "Play Star Wars"
+    icon: "mdi:music-note"
+    on_press:
+      - rtttl.play: "StarWars:d=4,o=5,b=45:32p,32f,32f,32f,8a#.,8f.6,32d#,32d,32c,8a#.6,4f.6,32d#,32d,32c,8a#.6,4f.6,32d#,32d,32d#,8c6"
+
+qr_code:
+  - id: qr_w_mnhegc6xjh20o
+    value: "https://github.com/koosoli/ESPHomeDesigner/"
+    ecc: LOW
+  - id: qr_w_mnheglpq5t010
+    value: "https://github.com/koosoli/ESPHomeDesigner/"
+    ecc: LOW
+
+font:
+  - file:
+      type: gfonts
+      family: "Roboto"
+      weight: 900
+      italic: false
+    id: font_roboto_900_20
+    size: 47
+    bpp: 1
+    glyphsets: [GF_Latin_Kernel]
+    ignore_missing_glyphs: true
+
+  - file:
+      type: gfonts
+      family: "Roboto"
+      weight: 900
+      italic: false
+    id: font_roboto_900_30
+    size: 70
+    bpp: 1
+    glyphsets: [GF_Latin_Kernel]
+    ignore_missing_glyphs: true
+
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: font_material_design_icons_400_300
+    size: 300
+    bpp: 1
+    glyphs: ["\U000F07D0"]
+
+script:
+  - id: manage_run_and_sleep
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return !(id(ha_time).now().is_valid() && api_is_connected());'
+          then:
+            - logger.log: "Waiting for sync..."
+            - wait_until:
+                condition:
+                  lambda: 'return id(ha_time).now().is_valid() && api_is_connected();'
+                timeout: 120s
+      - if:
+          condition:
+            lambda: 'return id(initial_sensor_sync_pending);'
+          then:
+            - logger.log: "Waiting 5s for initial sensor updates..."
+            - delay: 5s
+            - lambda: 'id(initial_sensor_sync_pending) = false;'
+      - lambda: |-
+          int interval = id(page_refresh_default_s);
+          id(page_refresh_current_s) = interval;
+      - component.update: epaper_display
+      - delay: !lambda 'return id(page_refresh_current_s) * 1000;'
+      - script.execute: manage_run_and_sleep
+
 display:
   - platform: it8951_reterminal_e1003
     id: epaper_display
     vcom: 1400
+    rotation: 0
     update_interval: never
     lambda: |-
       const auto COLOR_WHITE = Color(0, 0, 0);
       const auto COLOR_BLACK = Color(255, 255, 255);
+      auto color_off = COLOR_WHITE;
+      auto color_on = COLOR_BLACK;
+      const float SCALE = 2.34f;
+      const int OFFSET_Y = 140;
+      auto sx = [&](int v) -> int { return int(v * SCALE); };
+      auto sy = [&](int v) -> int { return int(OFFSET_Y + v * SCALE); };
+      auto ss = [&](int v) -> int { return int(v * SCALE); };
 
-      it.fill(COLOR_WHITE);
-      it.rectangle(20, 20, 1832, 1364, COLOR_BLACK);
-      it.rectangle(60, 60, 1752, 1284, COLOR_BLACK);
+      int currentPage = id(display_page);
 
-      it.filled_rectangle(100, 100, 260, 260, COLOR_BLACK);
-      it.rectangle(420, 100, 260, 260, COLOR_BLACK);
-      it.rectangle(740, 100, 260, 260, COLOR_BLACK);
-      it.filled_rectangle(1060, 100, 260, 260, COLOR_BLACK);
+      if (currentPage == 0) {
+        it.fill(COLOR_WHITE);
+        color_off = COLOR_WHITE;
+        color_on = COLOR_BLACK;
 
-      it.line(120, 480, 1750, 480, COLOR_BLACK);
-      it.line(120, 700, 1750, 700, COLOR_BLACK);
-      it.line(120, 920, 1750, 920, COLOR_BLACK);
+        {
+          auto draw_filled_rrect = [&](int x, int y, int w, int h, int r, auto c) {
+            it.filled_rectangle(x + r, y, w - 2 * r, h, c);
+            it.filled_rectangle(x, y + r, r, h - 2 * r, c);
+            it.filled_rectangle(x + w - r, y + r, r, h - 2 * r, c);
+            it.filled_circle(x + r, y + r, r, c);
+            it.filled_circle(x + w - r - 1, y + r, r, c);
+            it.filled_circle(x + r, y + h - r - 1, r, c);
+            it.filled_circle(x + w - r - 1, y + h - r - 1, r, c);
+          };
+          draw_filled_rrect(sx(268), sy(159), ss(249), ss(203), ss(10), COLOR_BLACK);
+          draw_filled_rrect(sx(272), sy(163), ss(241), ss(195), ss(6), COLOR_BLACK);
+        }
 
-      it.line(120, 1160, 1750, 520, COLOR_BLACK);
-      it.line(1750, 1160, 120, 520, COLOR_BLACK);
+        {
+          auto draw_filled_rrect = [&](int x, int y, int w, int h, int r, auto c) {
+            it.filled_rectangle(x + r, y, w - 2 * r, h, c);
+            it.filled_rectangle(x, y + r, r, h - 2 * r, c);
+            it.filled_rectangle(x + w - r, y + r, r, h - 2 * r, c);
+            it.filled_circle(x + r, y + r, r, c);
+            it.filled_circle(x + w - r - 1, y + r, r, c);
+            it.filled_circle(x + r, y + h - r - 1, r, c);
+            it.filled_circle(x + w - r - 1, y + h - r - 1, r, c);
+          };
+          draw_filled_rrect(sx(263), sy(154), ss(249), ss(203), ss(10), COLOR_BLACK);
+          draw_filled_rrect(sx(279), sy(170), ss(217), ss(171), 0, COLOR_WHITE);
+        }
 
-      it.circle(936, 702, 220, COLOR_BLACK);
-      it.circle(936, 702, 140, COLOR_BLACK);
-      it.filled_circle(936, 702, 50, COLOR_BLACK);
+        it.printf(sx(328), sy(241), id(font_roboto_900_20), color_on, TextAlign::TOP_LEFT, "Hello ");
+        it.printf(sx(328), sy(265), id(font_roboto_900_20), color_on, TextAlign::TOP_LEFT, "world!");
+
+        {
+          auto draw_filled_rrect = [&](int x, int y, int w, int h, int r, auto c) {
+            it.filled_rectangle(x + r, y, w - 2 * r, h, c);
+            it.filled_rectangle(x, y + r, r, h - 2 * r, c);
+            it.filled_rectangle(x + w - r, y + r, r, h - 2 * r, c);
+            it.filled_circle(x + r, y + r, r, c);
+            it.filled_circle(x + w - r - 1, y + r, r, c);
+            it.filled_circle(x + r, y + h - r - 1, r, c);
+            it.filled_circle(x + w - r - 1, y + h - r - 1, r, c);
+          };
+          draw_filled_rrect(sx(84), sy(30), ss(663), ss(104), ss(10), COLOR_BLACK);
+          draw_filled_rrect(sx(88), sy(34), ss(655), ss(96), ss(6), COLOR_BLACK);
+        }
+
+        {
+          auto draw_filled_rrect = [&](int x, int y, int w, int h, int r, auto c) {
+            it.filled_rectangle(x + r, y, w - 2 * r, h, c);
+            it.filled_rectangle(x, y + r, r, h - 2 * r, c);
+            it.filled_rectangle(x + w - r, y + r, r, h - 2 * r, c);
+            it.filled_circle(x + r, y + r, r, c);
+            it.filled_circle(x + w - r - 1, y + r, r, c);
+            it.filled_circle(x + r, y + h - r - 1, r, c);
+            it.filled_circle(x + w - r - 1, y + h - r - 1, r, c);
+          };
+          draw_filled_rrect(sx(79), sy(25), ss(663), ss(104), ss(10), COLOR_BLACK);
+          draw_filled_rrect(sx(83), sy(29), ss(655), ss(96), ss(6), COLOR_WHITE);
+        }
+
+        it.printf(sx(97), sy(57), id(font_roboto_900_30), color_on, TextAlign::TOP_LEFT,
+                  "ESPHome Designer Loves reTerminal E1003");
+
+        it.printf(sx(131), sy(213), id(font_material_design_icons_400_300), color_on,
+                  TextAlign::CENTER, "%s", "\U000F07D0");
+        it.printf(sx(639), sy(213), id(font_material_design_icons_400_300), color_on,
+                  TextAlign::CENTER, "%s", "\U000F07D0");
+
+        it.qr_code(sx(79), sy(326), id(qr_w_mnhegc6xjh20o), color_on, 9);
+        it.qr_code(sx(570), sy(326), id(qr_w_mnheglpq5t010), color_on, 9);
+
+        it.rectangle(sx(40), sy(140), ss(720), ss(320), color_on);
+        it.line(sx(79), sy(326), sx(208), sy(455), color_on);
+        it.line(sx(570), sy(326), sx(699), sy(455), color_on);
+      }

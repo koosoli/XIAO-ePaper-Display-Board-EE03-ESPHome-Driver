@@ -75,6 +75,7 @@ class IT8951ReTerminalE1003Display : public display::DisplayBuffer {
   void lcd_write_data_(uint16_t data);
   void lcd_write_n_data_(uint16_t *buf, uint32_t word_count);
   void lcd_write_framebuffer_4bpp_(uint16_t *buf, uint16_t width_in_words, uint16_t height);
+  void lcd_write_framebuffer_1bpp_(uint16_t width, uint16_t height);
   uint16_t lcd_read_data_();
   void lcd_read_n_data_(uint16_t *buf, uint32_t word_count);
   void lcd_wait_for_ready_();
@@ -84,7 +85,9 @@ class IT8951ReTerminalE1003Display : public display::DisplayBuffer {
   void wait_for_display_ready_();
   void log_framebuffer_stats_();
   uint32_t count_non_white_bytes_();
+  bool framebuffer_is_binary_();
   void draw_driver_test_pattern_();
+  uint8_t get_pixel_nibble_(uint16_t x, uint16_t y);
 
   void lcd_send_cmd_arg_(uint16_t cmd, uint16_t *args, uint16_t num_args);
   uint16_t it8951_read_reg_(uint16_t addr);
@@ -94,6 +97,8 @@ class IT8951ReTerminalE1003Display : public display::DisplayBuffer {
   void it8951_load_img_area_start_(uint16_t endian, uint16_t pix_fmt, uint16_t rotate, uint16_t x, uint16_t y,
                                    uint16_t w, uint16_t h);
   void it8951_display_area_(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t mode);
+  void it8951_display_area_1bpp_(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t mode, uint8_t bg_gray,
+                                 uint8_t fg_gray);
   void log_dev_info_words_(const char *label);
   bool has_valid_dev_info_() const;
   void write_vcom_(uint16_t selector, uint16_t value);

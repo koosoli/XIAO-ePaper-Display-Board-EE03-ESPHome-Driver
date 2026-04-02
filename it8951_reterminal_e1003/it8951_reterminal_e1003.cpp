@@ -123,6 +123,50 @@ void IT8951ReTerminalE1003Display::lcd_write_framebuffer_4bpp_(uint16_t *buf, ui
   digitalWrite(IT8951_PIN_CS, HIGH);
 }
 
+void IT8951ReTerminalE1003Display::lcd_write_framebuffer_1bpp_(uint16_t width, uint16_t height) {
+  uint16_t row_words[117];
+  uint8_t row_buffer[234];
+  const uint16_t width_in_words = width / 16;
+  const uint32_t row_size_bytes = uint32_t(width_in_words) * 2;
+
+  if (width_in_words > (sizeof(row_words) / sizeof(row_words[0])) || row_size_bytes > sizeof(row_buffer)) {
+    ESP_LOGE(TAG, "1bpp row buffer too small for %u-byte transfer", static_cast<unsigned>(row_size_bytes));
+    return;
+  }
+
+  digitalWrite(IT8951_PIN_CS, LOW);
+  SPI.beginTransaction(SPISettings(this->spi_frequency_, MSBFIRST, SPI_MODE0));
+  this->lcd_wait_for_ready_();
+  this->spi_send_word_(0x0000);
+  this->lcd_wait_for_ready_();
+
+  for (uint16_t y = 0; y < height; y++) {
+    memset(row_words, 0x00, row_size_bytes);
+
+    for (uint16_t x = 0; x < width; x++) {
+      const uint8_t nibble = this->get_pixel_nibble_(x, y);
+      if (nibble <= 0x07) {
+        row_words[x / 16] |= uint16_t(0x8000 >> (x & 0x0F));
+      }
+    }
+
+    for (uint16_t i = 0; i < width_in_words; i++) {
+      const uint16_t word = row_words[width_in_words - 1 - i];
+      const uint32_t byte_index = uint32_t(i) * 2;
+      row_buffer[byte_index] = static_cast<uint8_t>(word >> 8);
+      row_buffer[byte_index + 1] = static_cast<uint8_t>(word & 0xFF);
+    }
+
+    SPI.writeBytes(row_buffer, row_size_bytes);
+    if ((y & 0x07) == 0) {
+      App.feed_wdt();
+    }
+  }
+
+  SPI.endTransaction();
+  digitalWrite(IT8951_PIN_CS, HIGH);
+}
+
 uint16_t IT8951ReTerminalE1003Display::lcd_read_data_() {
   digitalWrite(IT8951_PIN_CS, LOW);
   SPI.beginTransaction(SPISettings(this->spi_frequency_, MSBFIRST, SPI_MODE0));
@@ -347,6 +391,22 @@ uint32_t IT8951ReTerminalE1003Display::count_non_white_bytes_() {
   return non_white;
 }
 
+bool IT8951ReTerminalE1003Display::framebuffer_is_binary_() {
+  if (this->framebuffer_ == nullptr) {
+    return false;
+  }
+
+  const uint32_t buffer_size = (uint32_t(this->get_width_internal()) * this->get_height_internal()) / 2;
+  for (uint32_t i = 0; i < buffer_size; i++) {
+    const uint8_t hi = this->framebuffer_[i] >> 4;
+    const uint8_t lo = this->framebuffer_[i] & 0x0F;
+    if ((hi != 0x00 && hi != 0x0F) || (lo != 0x00 && lo != 0x0F)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void IT8951ReTerminalE1003Display::draw_driver_test_pattern_() {
   if (this->framebuffer_ == nullptr) {
     return;
@@ -393,19 +453,34 @@ void IT8951ReTerminalE1003Display::update() {
   const uint16_t w = this->get_width_internal();
   const uint16_t h = this->get_height_internal();
   const uint16_t width_in_words = (w + 3) / 4;
+  const bool use_1bpp = this->framebuffer_is_binary_();
 
   this->wait_for_display_ready_();
 
   this->set_img_buf_base_addr_(this->img_buf_addr_);
-  this->it8951_load_img_area_start_(IT8951_LDIMG_L_ENDIAN, IT8951_4BPP, 0, 0, 0, w, h);
-  ESP_LOGD(TAG, "Uploading %u rows x %u words", h, width_in_words);
-  this->lcd_write_framebuffer_4bpp_(reinterpret_cast<uint16_t *>(this->framebuffer_), width_in_words, h);
+  if (use_1bpp) {
+    const uint16_t one_bpp_width_bytes = w / 8;
+    ESP_LOGD(TAG, "Using sharp 1bpp upload path");
+    this->it8951_load_img_area_start_(IT8951_LDIMG_L_ENDIAN, IT8951_8BPP, 0, 0, 0, one_bpp_width_bytes, h);
+    ESP_LOGD(TAG, "Uploading %u rows x %u packed bytes", h, one_bpp_width_bytes);
+    this->lcd_write_framebuffer_1bpp_(w, h);
+  } else {
+    ESP_LOGD(TAG, "Using 4bpp grayscale upload path");
+    this->it8951_write_reg_(UP1SR + 2, this->it8951_read_reg_(UP1SR + 2) & ~(1 << 2));
+    this->it8951_load_img_area_start_(IT8951_LDIMG_L_ENDIAN, IT8951_4BPP, 0, 0, 0, w, h);
+    ESP_LOGD(TAG, "Uploading %u rows x %u words", h, width_in_words);
+    this->lcd_write_framebuffer_4bpp_(reinterpret_cast<uint16_t *>(this->framebuffer_), width_in_words, h);
+  }
 
   ESP_LOGD(TAG, "Framebuffer upload complete");
   this->lcd_write_cmd_code_(IT8951_TCON_LD_IMG_END);
   const uint16_t refresh_mode = 2;
   ESP_LOGD(TAG, "Issuing display refresh in mode %u", refresh_mode);
-  this->it8951_display_area_(0, 0, w, h, refresh_mode);
+  if (use_1bpp) {
+    this->it8951_display_area_1bpp_(0, 0, w, h, refresh_mode, 0xFF, 0x00);
+  } else {
+    this->it8951_display_area_(0, 0, w, h, refresh_mode);
+  }
   this->first_update_ = false;
 
   ESP_LOGV(TAG, "Display update triggered");
@@ -444,6 +519,14 @@ void IT8951ReTerminalE1003Display::draw_absolute_pixel_internal(int x, int y, Co
   } else {
     this->framebuffer_[pos] = (this->framebuffer_[pos] & 0xF0) | pixel_val;
   }
+}
+
+uint8_t IT8951ReTerminalE1003Display::get_pixel_nibble_(uint16_t x, uint16_t y) {
+  const uint32_t pos = (x + y * this->get_width()) / 2;
+  if ((x & 1U) == 0) {
+    return this->framebuffer_[pos] >> 4;
+  }
+  return this->framebuffer_[pos] & 0x0F;
 }
 
 void IT8951ReTerminalE1003Display::lcd_send_cmd_arg_(uint16_t cmd, uint16_t *args, uint16_t num_args) {
@@ -497,6 +580,14 @@ void IT8951ReTerminalE1003Display::it8951_display_area_(uint16_t x, uint16_t y, 
   this->lcd_write_data_(w);
   this->lcd_write_data_(h);
   this->lcd_write_data_(mode);
+}
+
+void IT8951ReTerminalE1003Display::it8951_display_area_1bpp_(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                                                              uint16_t mode, uint8_t bg_gray, uint8_t fg_gray) {
+  this->it8951_write_reg_(UP1SR + 2, this->it8951_read_reg_(UP1SR + 2) | (1 << 2));
+  this->it8951_write_reg_(BGVR, (uint16_t(bg_gray) << 8) | fg_gray);
+  this->it8951_display_area_(x, y, w, h, mode);
+  this->wait_for_display_ready_();
 }
 
 }  // namespace it8951_reterminal_e1003
