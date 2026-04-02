@@ -74,12 +74,17 @@ class IT8951ReTerminalE1003Display : public display::DisplayBuffer {
   void lcd_write_cmd_code_(uint16_t cmd);
   void lcd_write_data_(uint16_t data);
   void lcd_write_n_data_(uint16_t *buf, uint32_t word_count);
+  void lcd_write_framebuffer_4bpp_(uint16_t *buf, uint16_t width_in_words, uint16_t height);
   uint16_t lcd_read_data_();
   void lcd_read_n_data_(uint16_t *buf, uint32_t word_count);
   void lcd_wait_for_ready_();
   void lcd_sys_run_();
   void hardware_reset_();
   void power_cycle_();
+  void wait_for_display_ready_();
+  void log_framebuffer_stats_();
+  uint32_t count_non_white_bytes_();
+  void draw_driver_test_pattern_();
 
   void lcd_send_cmd_arg_(uint16_t cmd, uint16_t *args, uint16_t num_args);
   uint16_t it8951_read_reg_(uint16_t addr);
@@ -104,6 +109,7 @@ class IT8951ReTerminalE1003Display : public display::DisplayBuffer {
   uint8_t *framebuffer_{nullptr};
   const char *fail_reason_{nullptr};
   uint16_t probe_vcom_{0};
+  bool first_update_{true};
 };
 
 }  // namespace it8951_reterminal_e1003

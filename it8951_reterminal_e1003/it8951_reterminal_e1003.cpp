@@ -87,6 +87,42 @@ void IT8951ReTerminalE1003Display::lcd_write_n_data_(uint16_t *buf, uint32_t wor
   digitalWrite(IT8951_PIN_CS, HIGH);
 }
 
+void IT8951ReTerminalE1003Display::lcd_write_framebuffer_4bpp_(uint16_t *buf, uint16_t width_in_words,
+                                                               uint16_t height) {
+  // One row at 1872px / 4bpp is 936 bytes. Sending a whole row at once is much
+  // faster than hundreds of thousands of per-word SPI.transfer16() calls.
+  uint8_t row_buffer[936];
+  const uint32_t row_size_bytes = uint32_t(width_in_words) * 2;
+  if (row_size_bytes > sizeof(row_buffer)) {
+    ESP_LOGE(TAG, "Row buffer too small for %u-byte transfer", static_cast<unsigned>(row_size_bytes));
+    return;
+  }
+
+  digitalWrite(IT8951_PIN_CS, LOW);
+  SPI.beginTransaction(SPISettings(this->spi_frequency_, MSBFIRST, SPI_MODE0));
+  this->lcd_wait_for_ready_();
+  this->spi_send_word_(0x0000);
+  this->lcd_wait_for_ready_();
+
+  // Match Seeed's working host upload flow by reversing each row at the word level.
+  for (uint16_t y = 0; y < height; y++) {
+    const uint32_t row_start = uint32_t(y) * width_in_words;
+    for (uint16_t x = 0; x < width_in_words; x++) {
+      const uint16_t word = buf[row_start + (width_in_words - 1 - x)];
+      const uint32_t byte_index = uint32_t(x) * 2;
+      row_buffer[byte_index] = static_cast<uint8_t>(word >> 8);
+      row_buffer[byte_index + 1] = static_cast<uint8_t>(word & 0xFF);
+    }
+    SPI.writeBytes(row_buffer, row_size_bytes);
+    if ((y & 0x07) == 0) {
+      App.feed_wdt();
+    }
+  }
+
+  SPI.endTransaction();
+  digitalWrite(IT8951_PIN_CS, HIGH);
+}
+
 uint16_t IT8951ReTerminalE1003Display::lcd_read_data_() {
   digitalWrite(IT8951_PIN_CS, LOW);
   SPI.beginTransaction(SPISettings(this->spi_frequency_, MSBFIRST, SPI_MODE0));
@@ -116,6 +152,18 @@ void IT8951ReTerminalE1003Display::lcd_read_n_data_(uint16_t *buf, uint32_t word
 }
 
 void IT8951ReTerminalE1003Display::lcd_sys_run_() { this->lcd_write_cmd_code_(IT8951_TCON_SYS_RUN); }
+
+void IT8951ReTerminalE1003Display::wait_for_display_ready_() {
+  const uint32_t start = millis();
+  while (this->it8951_read_reg_(LUTAFSR) != 0) {
+    if (millis() - start > 30000) {
+      ESP_LOGW(TAG, "Display-ready timeout while waiting for LUTAFSR to clear");
+      break;
+    }
+    App.feed_wdt();
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
 
 void IT8951ReTerminalE1003Display::write_vcom_(uint16_t selector, uint16_t value) {
   this->lcd_write_cmd_code_(USDEF_I80_CMD_VCOM);
@@ -262,6 +310,71 @@ void IT8951ReTerminalE1003Display::setup() {
   ESP_LOGCONFIG(TAG, "IT8951 reTerminal E1003 initialization complete");
 }
 
+void IT8951ReTerminalE1003Display::log_framebuffer_stats_() {
+  if (this->framebuffer_ == nullptr) {
+    ESP_LOGW(TAG, "Framebuffer stats requested before allocation");
+    return;
+  }
+
+  const uint32_t buffer_size = (uint32_t(this->get_width_internal()) * this->get_height_internal()) / 2;
+  uint32_t non_white = 0;
+  uint32_t pure_black = 0;
+  for (uint32_t i = 0; i < buffer_size; i++) {
+    if (this->framebuffer_[i] != 0xFF) {
+      non_white++;
+    }
+    if (this->framebuffer_[i] == 0x00) {
+      pure_black++;
+    }
+  }
+
+  const uint32_t sample_pos = ((100 + 100 * this->get_width_internal()) / 2);
+  const uint8_t sample = sample_pos < buffer_size ? this->framebuffer_[sample_pos] : 0xFF;
+  ESP_LOGD(TAG, "Framebuffer stats: non_white=%u pure_black=%u sample[100,100]=0x%02X", non_white, pure_black, sample);
+}
+
+uint32_t IT8951ReTerminalE1003Display::count_non_white_bytes_() {
+  if (this->framebuffer_ == nullptr) {
+    return 0;
+  }
+  const uint32_t buffer_size = (uint32_t(this->get_width_internal()) * this->get_height_internal()) / 2;
+  uint32_t non_white = 0;
+  for (uint32_t i = 0; i < buffer_size; i++) {
+    if (this->framebuffer_[i] != 0xFF) {
+      non_white++;
+    }
+  }
+  return non_white;
+}
+
+void IT8951ReTerminalE1003Display::draw_driver_test_pattern_() {
+  if (this->framebuffer_ == nullptr) {
+    return;
+  }
+
+  ESP_LOGW(TAG, "Writer callback left the framebuffer blank, drawing fallback driver test pattern");
+
+  for (int x = 20; x < 1852; x++) {
+    this->draw_absolute_pixel_internal(x, 20, Color(255, 255, 255));
+    this->draw_absolute_pixel_internal(x, 1383, Color(255, 255, 255));
+  }
+  for (int y = 20; y < 1384; y++) {
+    this->draw_absolute_pixel_internal(20, y, Color(255, 255, 255));
+    this->draw_absolute_pixel_internal(1851, y, Color(255, 255, 255));
+  }
+
+  for (int y = 120; y < 360; y++) {
+    for (int x = 120; x < 360; x++) {
+      this->draw_absolute_pixel_internal(x, y, Color(255, 255, 255));
+    }
+  }
+
+  for (int i = 0; i < 500; i++) {
+    this->draw_absolute_pixel_internal(500 + i, 500 + i, Color(255, 255, 255));
+    this->draw_absolute_pixel_internal(1371 - i, 500 + i, Color(255, 255, 255));
+  }
+}
+
 void IT8951ReTerminalE1003Display::update() {
   if (this->framebuffer_ == nullptr) {
     ESP_LOGW(TAG, "Skipping update because the framebuffer is not available");
@@ -269,20 +382,31 @@ void IT8951ReTerminalE1003Display::update() {
   }
 
   this->do_update_();
+  this->log_framebuffer_stats_();
+  if (this->count_non_white_bytes_() == 0) {
+    this->draw_driver_test_pattern_();
+    this->log_framebuffer_stats_();
+  }
 
   ESP_LOGD(TAG, "Transferring image to IT8951...");
 
   const uint16_t w = this->get_width_internal();
   const uint16_t h = this->get_height_internal();
+  const uint16_t width_in_words = (w + 3) / 4;
+
+  this->wait_for_display_ready_();
 
   this->set_img_buf_base_addr_(this->img_buf_addr_);
   this->it8951_load_img_area_start_(IT8951_LDIMG_L_ENDIAN, IT8951_4BPP, 0, 0, 0, w, h);
+  ESP_LOGD(TAG, "Uploading %u rows x %u words", h, width_in_words);
+  this->lcd_write_framebuffer_4bpp_(reinterpret_cast<uint16_t *>(this->framebuffer_), width_in_words, h);
 
-  const uint16_t width_in_words = (w + 3) / 4;
-  this->lcd_write_n_data_(reinterpret_cast<uint16_t *>(this->framebuffer_), uint32_t(width_in_words) * h);
-
+  ESP_LOGD(TAG, "Framebuffer upload complete");
   this->lcd_write_cmd_code_(IT8951_TCON_LD_IMG_END);
-  this->it8951_display_area_(0, 0, w, h, 2);
+  const uint16_t refresh_mode = 2;
+  ESP_LOGD(TAG, "Issuing display refresh in mode %u", refresh_mode);
+  this->it8951_display_area_(0, 0, w, h, refresh_mode);
+  this->first_update_ = false;
 
   ESP_LOGV(TAG, "Display update triggered");
 }
