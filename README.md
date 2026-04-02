@@ -1,58 +1,43 @@
-# XIAO ePaper Display Board EE03 ESPHome Driver
+# Seeed 10.3-inch IT8951 ESPHome Drivers
 
-Custom ESPHome external component and test configs for the Seeed XIAO ePaper Display Board EE03 using the IT8951 controller.
+Custom ESPHome external components and test configs for Seeed 10.3-inch IT8951-based ePaper hardware.
 
 ## Status
 
-This project is currently **not functional** on the tested hardware.
+Both board-specific drivers in this repo are currently **untested**.
 
-- The custom component builds and flashes successfully.
-- OTA updates and normal ESPHome boot work.
-- The display still does not return valid IT8951 device info over SPI, so no image is shown yet.
+- `it8951/` targets the XIAO ePaper Display Board EE03 pinout.
+- `it8951_reterminal_e1003/` targets the reTerminal E1003 pinout from Seeed Setup 522.
 
-## What Is Included
-
-- `it8951/`
-  Custom ESPHome display component under active development.
-- `xiao_test_smoke.yaml`
-  Minimal smoke-test config for display bring-up.
-- `xiao_test_ha.yaml`
-  Home Assistant / ESPHome test config with safe secret placeholders.
-- `xiao_test.yaml`
-  Larger designer-derived example config with safe secret placeholders.
-- `secrets.example.yaml`
-  Template for local credentials. Copy this to `secrets.yaml` and fill in your own values before compiling.
-- `arduino_ee03/`
-  Reference Arduino demo shared by Seeed engineers.
-- `seeed_gfx/`
-  Reference graphics library from Seeed.
-- `seeed_lcd/`
-  Additional reference library files.
-- `XIAO ePaper Display Board EE03_V1.0_SCH & PCB_251217/`
-  Hardware design files used for pin and board-path investigation.
 
 ## Quick Start
 
 1. Copy `secrets.example.yaml` to `secrets.yaml`.
 2. Replace the placeholder values in `secrets.yaml` with your own local credentials.
-3. Put the `it8951/` folder next to the YAML you want to test.
-4. Start with `xiao_test_smoke.yaml` or `xiao_test_ha.yaml`.
-5. Compile and flash with ESPHome.
+3. Put the component folder for your board next to the YAML you want to test.
+4. For EE03, start with `xiao_test_smoke.yaml` or `xiao_test_ha.yaml`.
+5. For reTerminal E1003, start with `reterminal_e1003_test_smoke.yaml` or `reterminal_e1003_test_ha.yaml`.
+6. Compile and flash with ESPHome.
 
-## Current Known Problem
+## Board Pin Summary
 
-The main blocker is still SPI communication with the IT8951 on the EE03 board. The current driver already tries:
+EE03:
+- `TFT_SCLK=7`
+- `TFT_MISO=8`
+- `TFT_MOSI=9`
+- `TFT_CS=44`
+- `TFT_BUSY=4`
+- `TFT_RST=38`
+- `TFT_ENABLE=43`
 
-- hardware reset
-- power cycling through `PWR_EN`
-- low-speed SPI probing
-- `SYS_RUN` wake attempts
-- multiple VCOM write variants
+reTerminal E1003:
+- `TFT_SCLK=7`
+- `TFT_MISO=8`
+- `TFT_MOSI=9`
+- `TFT_CS=10`
+- `TFT_BUSY=13`
+- `TFT_RST=12`
+- `TFT_ENABLE=11`
+- `ITE_ENABLE=21`
 
-Even with those probes, the tested board still reports zeroed device info and does not refresh the panel.
 
-## Notes
-
-- `secrets.yaml` is intentionally gitignored and should not be committed.
-- `build_log.txt`, `.esphome/`, and workspace files are also ignored for a cleaner upload.
-- The larger `xiao_test.yaml` expects extra assets if you want to use the full designer layout.
