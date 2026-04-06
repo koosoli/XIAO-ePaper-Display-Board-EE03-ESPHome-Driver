@@ -104,14 +104,14 @@ void IT8951ReTerminalE1003Display::lcd_write_framebuffer_4bpp_(uint16_t *buf, ui
     this->spi_send_word_(0x0000);
     this->lcd_wait_for_ready_();
 
-    // Match Seeed's working host upload flow by reversing each row at the word level.
     for (uint16_t y = 0; y < height; y++) {
         const uint32_t row_start = uint32_t(y) * width_in_words;
         for (uint16_t x = 0; x < width_in_words; x++) {
             const uint16_t word = buf[row_start + (width_in_words - 1 - x)];
             const uint32_t byte_index = uint32_t(x) * 2;
-            row_buffer[byte_index] = static_cast<uint8_t>(word >> 8);
-            row_buffer[byte_index + 1] = static_cast<uint8_t>(word & 0xFF);
+            // Send low byte first (little-endian)
+            row_buffer[byte_index] = static_cast<uint8_t>(word & 0xFF);
+            row_buffer[byte_index + 1] = static_cast<uint8_t>(word >> 8);
         }
         SPI.writeBytes(row_buffer, row_size_bytes);
         if ((y & 0x07) == 0) {
@@ -512,10 +512,9 @@ void IT8951ReTerminalE1003Display::draw_absolute_pixel_internal(int x, int y, Co
     }
 
     const uint32_t pos = (x + y * this->get_width()) / 2;
-    // Extract the upper 4 bits of the red channel as the gray level.
-    // Input colors are expected to be uniform grays (R==G==B), e.g. 0x000000–0xFFFFFF
-    // in 16 equal steps. 0x0 = black, 0xF = white, matching the panel's convention.
-    const uint8_t pixel_val = color.r >> 4;
+    // BT.601 luma: Y = 0.299*R + 0.587*G + 0.114*B, scaled to 4-bit (0=black, 15=white).
+    const uint8_t luma = static_cast<uint8_t>((77u * color.r + 150u * color.g + 29u * color.b) >> 8);
+    const uint8_t pixel_val = luma >> 4;
 
     if ((x % 2) == 0) {
         this->framebuffer_[pos] = (this->framebuffer_[pos] & 0x0F) | (pixel_val << 4);
